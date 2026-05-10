@@ -145,7 +145,7 @@ export class Course {
     @Column()
     name: string;
 
-    @Column({ type: 'varchar', length: 6 })
+    @Column({ type: 'varchar', length: 6, unique: true })
     code: string;
 
     @ManyToOne(() => College, (college) => college.courses)

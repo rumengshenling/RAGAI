@@ -75,7 +75,14 @@ export class DataCollectionService {
             if (teachers.length > 0) {
                 await this.dataSource.transaction(async (manager) => {
                     for (const teacher of teachers) {
-                        await manager.save(Teacher, teacher);
+                        const existing = await manager.findOne(Teacher, {
+                            where: { employeeId: teacher.employeeId }
+                        });
+                        if (existing) {
+                            await manager.update(Teacher, existing.id, teacher);
+                        } else {
+                            await manager.save(Teacher, teacher);
+                        }
                     }
                 });
             }
@@ -145,7 +152,14 @@ export class DataCollectionService {
             if (courses.length > 0) {
                 await this.dataSource.transaction(async (manager) => {
                     for (const course of courses) {
-                        await manager.save(Course, course);
+                        const existing = await manager.findOne(Course, {
+                            where: { code: course.code }
+                        });
+                        if (existing) {
+                            await manager.update(Course, existing.id, course);
+                        } else {
+                            await manager.save(Course, course);
+                        }
                     }
                 });
             }
@@ -172,9 +186,6 @@ export class DataCollectionService {
         }
     }
 
-    /**
-     * ����ѧ������
-     */
     async importStudents(file: Express.Multer.File) {
         const record = await this.createImportRecord('student', file);
 
@@ -325,7 +336,18 @@ export class DataCollectionService {
             if (scores.length > 0) {
                 await this.dataSource.transaction(async (manager) => {
                     for (const score of scores) {
-                        await manager.save(StudentScore, score);
+                        const existing = await manager.findOne(StudentScore, {
+                            where: { 
+                                studentId: score.studentId,
+                                courseId: score.courseId,
+                                semester: score.semester
+                            }
+                        });
+                        if (existing) {
+                            await manager.update(StudentScore, existing.id, score);
+                        } else {
+                            await manager.save(StudentScore, score);
+                        }
                     }
                 });
             }
