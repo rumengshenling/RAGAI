@@ -1,0 +1,5 @@
+net start postgresql-x64-18
+npm run start:dev
+.\venv\Scripts\activate
+python app.py
+npm run dev

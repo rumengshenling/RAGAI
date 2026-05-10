@@ -1,0 +1,11 @@
+# 核心依赖
+fastapi
+uvicorn[standard]
+pydantic
+python-multipart
+requests
+
+# AI/ML 依赖（使用预编译版本）
+numpy
+torch
+transformers
