@@ -336,17 +336,47 @@ export class DataCollectionService {
             if (scores.length > 0) {
                 await this.dataSource.transaction(async (manager) => {
                     for (const score of scores) {
+                        // 根据学号查找学生的 UUID
+                        const student = await manager.findOne(Student, {
+                            where: { studentId: score.studentId }
+                        });
+                        if (!student) {
+                            errors.push({ row: 0, data: score, errors: [`学号 ${score.studentId} 不存在`] });
+                            continue;
+                        }
+            
+                        // 根据课程代码查找课程的 UUID
+                        const course = await manager.findOne(Course, {
+                            where: { code: score.courseId }
+                        });
+                        if (!course) {
+                            errors.push({ row: 0, data: score, errors: [`课程代码 ${score.courseId} 不存在`] });
+                            continue;
+                        }
+            
+                        // 使用查找到的 UUID 构建成绩对象
+                        const scoreData = {
+                            studentId: student.id,      // ✅ 用 UUID
+                            courseId: course.id,        // ✅ 用 UUID
+                            score: score.score,
+                            usualScore: score.usualScore,
+                            examScore: score.examScore,
+                            semester: score.semester,
+                            academicYear: score.academicYear,
+                            examType: score.examType,
+                        };
+            
                         const existing = await manager.findOne(StudentScore, {
                             where: { 
-                                studentId: score.studentId,
-                                courseId: score.courseId,
+                                studentId: student.id,    // ✅ 用 UUID
+                                courseId: course.id,      // ✅ 用 UUID
                                 semester: score.semester
                             }
                         });
                         if (existing) {
-                            await manager.update(StudentScore, existing.id, score);
+                            await manager.update(StudentScore, existing.id, scoreData);
                         } else {
-                            await manager.save(StudentScore, score);
+                            await manager.save(StudentScore, scoreData);
                         }
                     }
                 });
