@@ -3,3 +3,5 @@ npm run start:dev
 .\venv\Scripts\activate
 python app.py
 npm run dev
+
+激活数据库：

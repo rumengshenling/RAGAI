@@ -55,14 +55,17 @@ export class VisualizationService {
 
         const courses = await queryBuilder.getMany();
 
+        // 只保留有成绩的课程来计算平均通过率和平均分
+        const coursesWithScores = courses.filter(c => c.studentCount > 0);
+
         // 按学院统计
         const collegeStats = this.groupByCollege(courses);
 
         return {
             courseCount: courses.length,
             totalStudents: courses.reduce((sum, c) => sum + c.studentCount, 0),
-            avgPassRate: this.calculateAverage(courses.map(c => c.passRate)),
-            avgScore: this.calculateAverage(courses.map(c => c.averageScore)),
+            avgPassRate: this.calculateAverage(coursesWithScores.map(c => c.passRate)),
+            avgScore: this.calculateAverage(coursesWithScores.map(c => c.averageScore)),
             collegeStats,
             courseTypeDistribution: this.groupByCourseType(courses),
         };
@@ -143,6 +146,7 @@ export class VisualizationService {
         const result = await this.courseRepo
             .createQueryBuilder('course')
             .select('AVG(course.passRate)', 'avg')
+            .where('course.studentCount > 0')  // 只计算有成绩的课程
             .getRawOne();
         return parseFloat(result.avg) || 0;
     }

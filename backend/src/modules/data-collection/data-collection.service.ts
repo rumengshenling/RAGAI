@@ -354,10 +354,10 @@ export class DataCollectionService {
                             continue;
                         }
             
-                        // 使用查找到的 UUID 构建成绩对象
+                        // 使用学生UUID和课程代码构建成绩对象
                         const scoreData = {
-                            studentId: student.id,      // ✅ 用 UUID
-                            courseId: course.id,        // ✅ 用 UUID
+                            studentId: student.id,      // ✅ 用学生UUID
+                            courseId: course.code,      // ✅ 用课程代码（不是UUID）
                             score: score.score,
                             usualScore: score.usualScore,
                             examScore: score.examScore,
@@ -368,8 +368,8 @@ export class DataCollectionService {
             
                         const existing = await manager.findOne(StudentScore, {
                             where: { 
-                                studentId: student.id,    // ✅ 用 UUID
-                                courseId: course.id,      // ✅ 用 UUID
+                                studentId: student.id,    // ✅ 用学生UUID
+                                courseId: course.code,    // ✅ 用课程代码（不是UUID）
                                 semester: score.semester
                             }
                         });
@@ -380,6 +380,9 @@ export class DataCollectionService {
                         }
                     }
                 });
+
+                // 更新课程统计数据
+                await this.updateCourseStats();
             }
 
             record.status = (errors.length === 0 ? 'success' : 'failed') as any;
@@ -401,6 +404,37 @@ export class DataCollectionService {
             record.errorMessage = String(error);
             await this.importRecordRepo.save(record);
             throw new BadRequestException(`导入失败: ${error}`);
+        }
+    }
+
+    // 更新课程统计数据：通过率和平均分
+    private async updateCourseStats() {
+        const courses = await this.courseRepo.find();
+
+        for (const course of courses) {
+            // 查询该课程的所有成绩
+            const scores = await this.scoreRepo.find({
+                where: { courseId: course.code }
+            });
+
+            if (scores.length === 0) {
+                continue;
+            }
+
+            // 计算通过率：成绩 >= 60 的比例
+            const passCount = scores.filter(s => s.score >= 60).length;
+            const passRate = (passCount / scores.length) * 100;
+
+            // 计算平均分
+            const totalScore = scores.reduce((sum, s) => sum + s.score, 0);
+            const averageScore = totalScore / scores.length;
+
+            // 更新课程统计
+            await this.courseRepo.update(course.id, {
+                passRate,
+                averageScore,
+                studentCount: scores.length,
+            });
         }
     }
 
