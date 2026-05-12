@@ -4,6 +4,8 @@ from typing import List, Optional
 import uvicorn
 import requests
 import re
+import json
+import os
 
 app = FastAPI(title="AI服务 - 向量嵌入与文本生成")
 
@@ -39,6 +41,85 @@ OLLAMA_MODEL = "qwen:7b"
 
 # 是否使用 Ollama
 USE_OLLAMA = True
+
+# ================================
+# FAQ知识库
+# ================================
+
+# FAQ知识库路径
+FAQ_PATH = os.path.join(os.path.dirname(__file__), "data", "faq-knowledge-base.json")
+
+# 全局FAQ知识库
+FAQ_KNOWLEDGE_BASE = None
+FAQ_METADATA = None
+
+
+def load_faq_knowledge_base():
+    """加载FAQ知识库"""
+    global FAQ_KNOWLEDGE_BASE, FAQ_METADATA
+    
+    try:
+        if os.path.exists(FAQ_PATH):
+            with open(FAQ_PATH, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                FAQ_METADATA = data.get("metadata", {})
+                FAQ_KNOWLEDGE_BASE = data.get("faqs", [])
+                print(f"✅ FAQ知识库加载成功！共 {len(FAQ_KNOWLEDGE_BASE)} 个问答")
+                print(f"   分类：{FAQ_METADATA.get('categories', [])}")
+        else:
+            print(f"⚠️ FAQ知识库文件不存在：{FAQ_PATH}")
+            FAQ_KNOWLEDGE_BASE = []
+    except Exception as e:
+        print(f"❌ FAQ知识库加载失败：{e}")
+        FAQ_KNOWLEDGE_BASE = []
+
+
+def find_matching_faq(question: str):
+    """
+    在FAQ知识库中查找匹配的问题
+    使用关键词匹配策略
+    """
+    if not FAQ_KNOWLEDGE_BASE:
+        return None
+    
+    # 预处理用户问题
+    question_lower = question.lower().strip()
+    
+    best_match = None
+    best_score = 0
+    
+    # 遍历所有FAQ
+    for faq in FAQ_KNOWLEDGE_BASE:
+        score = 0
+        
+        # 直接匹配问题
+        if faq["question"].lower() in question_lower:
+            score += 100
+        
+        # 关键词匹配
+        for keyword in faq.get("keywords", []):
+            if keyword.lower() in question_lower:
+                score += 10
+        
+        # 分类匹配（可选）
+        if faq.get("category") and faq["category"].lower() in question_lower:
+            score += 5
+        
+        # 更新最佳匹配
+        if score > best_score:
+            best_score = score
+            best_match = faq
+    
+    # 只有分数足够高时才返回匹配结果
+    if best_score >= 10:  # 至少匹配一个关键词
+        return {
+            "question": best_match["question"],
+            "answer": best_match["answer"],
+            "category": best_match.get("category"),
+            "score": best_score
+        }
+    
+    return None
 
 # ================================
 # 输入预处理与类型识别
@@ -99,20 +180,23 @@ async def startup_event():
     print("AI 服务启动中...")
     print("=" * 50)
     
+    # 加载FAQ知识库
+    load_faq_knowledge_base()
+    
     if USE_OLLAMA:
         try:
             response = requests.get(f"{OLLAMA_URL}/api/tags", timeout=2)
             if response.status_code == 200:
-                print(f"[OK] Ollama 服务可用: {OLLAMA_URL}")
+                print(f"[OK] Ollama 服务可用：{OLLAMA_URL}")
                 models = response.json().get('models', [])
                 if models:
-                    print(f"[OK] 可用模型: {[m['name'] for m in models]}")
+                    print(f"[OK] 可用模型：{[m['name'] for m in models]}")
                 else:
-                    print(f"[WARN] Ollama 没有安装模型，请运行: ollama pull {OLLAMA_MODEL}")
+                    print(f"[WARN] Ollama 没有安装模型，请运行：ollama pull {OLLAMA_MODEL}")
             else:
                 print("[WARN] Ollama 服务响应异常")
         except Exception as e:
-            print(f"[WARN] Ollama 不可用: {e}")
+            print(f"[WARN] Ollama 不可用：{e}")
             print("   将使用模拟模式运行")
     
     print("=" * 50)
@@ -123,16 +207,30 @@ async def startup_event():
 async def chat(request: ChatRequest):
     """
     文本生成接口
-    优先使用 Ollama 本地模型，否则返回模拟响应
+    优先使用FAQ知识库，其次Ollama本地模型，否则返回模拟响应
     """
     try:
         # 预处理用户输入
         processed_text, input_type = process_input(request.prompt)
-        print(f"[DEBUG] 输入类型: {input_type}, 处理后文本: {repr(processed_text)}")
+        print(f"[DEBUG] 输入类型：{input_type}，处理后文本：{repr(processed_text)}")
         
         # 如果是数学计算且已计算完成，直接返回结果
         if input_type == "calculated":
             return ChatResponse(answer=processed_text, model="calculator")
+        
+        # 1. 首先检查FAQ知识库
+        print(f"[DEBUG] 检查FAQ知识库...")
+        faq_match = find_matching_faq(request.prompt)
+        
+        if faq_match:
+            print(f"✅ FAQ匹配成功！问题：{faq_match['question']}")
+            print(f"   得分：{faq_match['score']}，分类：{faq_match['category']}")
+            # 使用FAQ回答，并加上来源标识
+            faq_answer = f"{faq_match['answer']}\n\n[来自知识库：{faq_match['category']}]"
+            return ChatResponse(answer=faq_answer, model="faq-knowledge-base")
+        
+        # 2. FAQ中没有匹配，调用Ollama
+        print(f"[DEBUG] FAQ未匹配，调用Ollama...")
         
         if USE_OLLAMA:
             import json
@@ -150,7 +248,7 @@ async def chat(request: ChatRequest):
             }
             
             json_str = json.dumps(data, ensure_ascii=False)
-            print(f"[DEBUG] 发送给 Ollama 的 JSON: {json_str[:200]}...")
+            print(f"[DEBUG] 发送给 Ollama 的 JSON：{json_str[:200]}...")
             
             response = requests.post(
                 f"{OLLAMA_URL}/api/chat",
@@ -160,19 +258,20 @@ async def chat(request: ChatRequest):
             )
             response.encoding = 'utf-8'
             
-            print(f"[DEBUG] Ollama 响应状态码: {response.status_code}")
+            print(f"[DEBUG] Ollama 响应状态码：{response.status_code}")
             
             if response.status_code == 200:
                 result = response.json()
                 answer = result.get('message', {}).get('content', '生成失败')
                 return ChatResponse(answer=answer, model=data["model"])
         
-        answer = f"【模拟模式】收到问题：{request.prompt}\n\n请安装 Ollama 并下载模型以获得真实回答：\n1. 安装 Ollama: https://ollama.com\n2. 运行: ollama pull qwen:7b"
+        # 3. Ollama不可用时使用模拟模式
+        answer = f"【模拟模式】收到问题：{request.prompt}\n\n请安装 Ollama 并下载模型以获得真实回答：\n1. 安装 Ollama：https://ollama.com\n2. 运行：ollama pull qwen:7b"
         return ChatResponse(answer=answer, model="simulation")
         
     except Exception as e:
-        print(f"[ERROR] 调用 Ollama 失败: {str(e)}")
-        answer = f"AI 服务暂时不可用。\n\n错误信息：{str(e)}\n\n请检查：\n1. Ollama 是否已安装并运行\n2. 模型是否已下载: ollama pull qwen:7b"
+        print(f"[ERROR] 处理失败：{str(e)}")
+        answer = f"AI 服务暂时不可用。\n\n错误信息：{str(e)}\n\n请检查：\n1. Ollama 是否已安装并运行\n2. 模型是否已下载：ollama pull qwen:7b"
         return ChatResponse(answer=answer, model="error")
 
 @app.post("/embed", response_model=EmbedResponse)
@@ -199,6 +298,50 @@ async def health():
         "ollama": "available" if check_ollama() else "unavailable"
     }
 
+@app.get("/faq/status")
+async def faq_status():
+    """获取FAQ知识库状态"""
+    return {
+        "status": "ok",
+        "faq_count": len(FAQ_KNOWLEDGE_BASE) if FAQ_KNOWLEDGE_BASE else 0,
+        "metadata": FAQ_METADATA,
+        "categories": FAQ_METADATA.get("categories", []) if FAQ_METADATA else []
+    }
+
+
+@app.get("/faq/list")
+async def faq_list(limit: int = 10, category: Optional[str] = None):
+    """获取FAQ列表"""
+    if not FAQ_KNOWLEDGE_BASE:
+        return {"faqs": [], "count": 0}
+    
+    faqs = FAQ_KNOWLEDGE_BASE
+    if category:
+        faqs = [f for f in faqs if f.get("category") == category]
+    
+    return {
+        "faqs": faqs[:limit],
+        "count": len(faqs)
+    }
+
+
+@app.post("/faq/match")
+async def faq_match(question: str):
+    """测试FAQ匹配功能"""
+    match = find_matching_faq(question)
+    if match:
+        return {
+            "matched": True,
+            "result": match
+        }
+    else:
+        return {
+            "matched": False,
+            "result": None,
+            "message": "没有找到匹配的FAQ"
+        }
+
+
 @app.get("/")
 async def root():
     """根路径"""
@@ -208,7 +351,10 @@ async def root():
         "endpoints": {
             "chat": "/chat",
             "embed": "/embed",
-            "health": "/health"
+            "health": "/health",
+            "faq_status": "/faq/status",
+            "faq_list": "/faq/list",
+            "faq_match": "/faq/match"
         }
     }
 
