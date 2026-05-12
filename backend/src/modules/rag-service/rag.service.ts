@@ -1,6 +1,9 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
 import axios from 'axios';
+import { Student, Teacher, Course, StudentScore, WarningRecord } from '@/database/entities';
 
 @Injectable()
 export class RagService {
@@ -9,7 +12,14 @@ export class RagService {
     private documents: any[] = [];
     private readonly axiosInstance: any;
 
-    constructor(private configService: ConfigService) {
+    constructor(
+        private configService: ConfigService,
+        @InjectRepository(Student) private studentRepo: Repository<Student>,
+        @InjectRepository(Teacher) private teacherRepo: Repository<Teacher>,
+        @InjectRepository(Course) private courseRepo: Repository<Course>,
+        @InjectRepository(StudentScore) private scoreRepo: Repository<StudentScore>,
+        @InjectRepository(WarningRecord) private warningRepo: Repository<WarningRecord>,
+    ) {
         this.aiServiceUrl = this.configService.get('AI_SERVICE_URL', 'http://localhost:8000');
         this.axiosInstance = axios.create({
             responseType: 'json',
@@ -23,11 +33,17 @@ export class RagService {
     async chat(dto: any) {
         const { question, conversationHistory = [] } = dto;
 
+        // 1. 获取知识库文档
         const relevantDocs = await this.semanticSearch(question, 3);
-
-        const context = relevantDocs
+        const docsContext = relevantDocs
             .map((doc: any) => doc.content)
             .join('\n\n');
+
+        // 2. 获取数据库数据（根据问题自动查询）
+        const dbContext = await this.queryDatabase(question);
+
+        // 3. 合并上下文
+        const context = [docsContext, dbContext].filter(Boolean).join('\n\n');
 
         const prompt = this.buildRagPrompt(question, context, conversationHistory);
 
@@ -55,6 +71,103 @@ export class RagService {
                 error: true,
             };
         }
+    }
+
+    /**
+     * 根据问题查询数据库
+     */
+    private async queryDatabase(question: string): Promise<string> {
+        const contexts: string[] = [];
+
+        // 检测问题类型并查询相应数据
+        if (this.containsKeywords(question, ['学生', '学号', '学员', '在校生'])) {
+            const studentCount = await this.studentRepo.count();
+            contexts.push(`学生总数：${studentCount}人`);
+        }
+
+        if (this.containsKeywords(question, ['教师', '老师', '教职工', '讲师'])) {
+            const teacherCount = await this.teacherRepo.count();
+            contexts.push(`教师总数：${teacherCount}人`);
+        }
+
+        if (this.containsKeywords(question, ['课程', '科目', '课'])) {
+            const courseCount = await this.courseRepo.count();
+            contexts.push(`课程总数：${courseCount}门`);
+        }
+
+        if (this.containsKeywords(question, ['成绩', '分数', '考试', '学分'])) {
+            const scoreCount = await this.scoreRepo.count();
+            contexts.push(`成绩记录总数：${scoreCount}条`);
+        }
+
+        if (this.containsKeywords(question, ['预警', '警告', '未通过', '不及格'])) {
+            const warningCount = await this.warningRepo.count();
+            contexts.push(`预警记录总数：${warningCount}条`);
+        }
+
+        // 查询特定学生信息、成绩、学分
+        const studentIdMatch = question.match(/(\d{12})/);
+        if (studentIdMatch) {
+            const studentId = studentIdMatch[1];
+            const student = await this.studentRepo.findOne({ where: { studentId } });
+            
+            if (student) {
+                // 学生基本信息
+                contexts.push(`学生信息：学号${student.studentId}，姓名${student.name}，性别${student.gender === 'male' ? '男' : '女'}，专业${student.major}，年级${student.grade}级，班级${student.class || '未分配'}`);
+
+                // 查询学生成绩（直接关联查询课程）
+                const scores = await this.scoreRepo
+                    .createQueryBuilder('score')
+                    .leftJoinAndSelect('score.course', 'course')
+                    .where('score.studentId = :studentId', { studentId: student.id })
+                    .getMany();
+
+                if (scores.length > 0) {
+                    let totalCredits = 0;
+                    let earnedCredits = 0;
+                    const scoreDetails = [];
+                    
+                    for (const score of scores) {
+                        const course = score.course;
+                        const courseName = course?.name || '未知课程';
+                        const courseCode = course?.code || '未知代码';
+                        const credits = Number(course?.credits || 0);
+                        const scoreValue = Number(score.score);
+                        
+                        scoreDetails.push(`${courseName}(${courseCode})：${scoreValue}分，学分${credits}`);
+                        
+                        totalCredits += credits;
+                        if (scoreValue >= 60) {
+                            earnedCredits += credits;
+                        }
+                    }
+                    
+                    contexts.push(`成绩情况：共${scores.length}门课程，${scoreDetails.join('；')}`);
+                    contexts.push(`学分情况：总修读学分${totalCredits}，已获得学分${earnedCredits}，未获得学分${totalCredits - earnedCredits}`);
+                } else {
+                    contexts.push('该学生暂无成绩记录');
+                }
+            }
+        }
+
+        // 查询特定教师信息
+        const teacherIdMatch = question.match(/教师(\d{6})|工号(\d{6})/);
+        if (teacherIdMatch) {
+            const employeeId = teacherIdMatch[1] || teacherIdMatch[2];
+            const teacher = await this.teacherRepo.findOne({ where: { employeeId } });
+            if (teacher) {
+                contexts.push(`教师信息：工号${teacher.employeeId}，姓名${teacher.name}，职称${teacher.title}，学院ID${teacher.collegeId}`);
+            }
+        }
+
+        return contexts.join('\n');
+    }
+
+    /**
+     * 检测问题中是否包含关键词
+     */
+    private containsKeywords(text: string, keywords: string[]): boolean {
+        return keywords.some(keyword => text.includes(keyword));
     }
 
     /**
