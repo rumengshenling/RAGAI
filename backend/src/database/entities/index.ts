@@ -326,6 +326,9 @@ export class WarningRecord {
     @Column({ type: 'varchar', length: 2, nullable: true })
     collegeId: string;
 
+    @Column({ type: 'varchar', length: 12, nullable: true })
+    studentId: string;
+
     @Column({ default: 'pending' })
     status: 'pending' | 'processing' | 'resolved';
 

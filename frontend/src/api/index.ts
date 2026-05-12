@@ -120,6 +120,8 @@ export const earlyWarningApi = {
     getWarningDetail: (id: string) => api.get(`/early-warning/records/${id}`),
     analyzeCauses: (id: string) => api.post(`/early-warning/analyze/${id}`),
     getIndicators: () => api.get('/early-warning/indicators'),
+    getWarningStudents: () => api.get('/early-warning/students'),
+    getStudentDetail: (studentId: string) => api.get(`/early-warning/student/${studentId}`),
 }
 
 // RAG智能问答接口

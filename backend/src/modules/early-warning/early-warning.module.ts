@@ -2,11 +2,11 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { EarlyWarningController } from './early-warning.controller';
 import { EarlyWarningService } from './early-warning.service';
-import { WarningRecord, Teacher, Course, Student } from '@/database/entities';
+import { WarningRecord, Teacher, Course, Student, StudentScore } from '@/database/entities';
 
 @Module({
     imports: [
-        TypeOrmModule.forFeature([WarningRecord, Teacher, Course, Student]),
+        TypeOrmModule.forFeature([WarningRecord, Teacher, Course, Student, StudentScore]),
     ],
     controllers: [EarlyWarningController],
     providers: [EarlyWarningService],
