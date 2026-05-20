@@ -33,36 +33,58 @@ export class RagService {
     async chat(dto: any) {
         const { question, conversationHistory = [] } = dto;
 
-        // 1. 获取知识库文档
-        const relevantDocs = await this.semanticSearch(question, 3);
-        const docsContext = relevantDocs
-            .map((doc: any) => doc.content)
-            .join('\n\n');
-
-        // 2. 获取数据库数据（根据问题自动查询）
-        const dbContext = await this.queryDatabase(question);
-
-        // 3. 合并上下文
-        const context = [docsContext, dbContext].filter(Boolean).join('\n\n');
-
-        const prompt = this.buildRagPrompt(question, context, conversationHistory);
-
         try {
-            const response = await this.axiosInstance.post(`${this.aiServiceUrl}/chat`, {
-                prompt,
+            // 1. 先调用AI服务，看是否是FAQ问题
+            this.logger.log(`正在查询AI服务: ${question}`);
+            const firstResponse = await this.axiosInstance.post(`${this.aiServiceUrl}/chat`, {
+                prompt: question,
                 model: this.configService.get('AI_MODEL_NAME', 'chatglm3-6b'),
                 temperature: 0.7,
                 max_tokens: 2000,
             });
 
-            return {
-                answer: response.data.answer,
-                sources: relevantDocs.map((doc: any) => ({
-                    title: doc.title,
-                    relevance: doc.score,
-                })),
-                timestamp: new Date().toISOString(),
-            };
+            // 检查是否是特殊标志：需要继续查数据库
+            if (firstResponse.data.answer === '__NEED_DB_QUERY__') {
+                this.logger.log('AI服务判断需要查询数据库，继续执行完整流程');
+                
+                // 获取知识库文档
+                const relevantDocs = await this.semanticSearch(question, 3);
+                const docsContext = relevantDocs
+                    .map((doc: any) => doc.content)
+                    .join('\n\n');
+
+                // 获取数据库数据
+                const dbContext = await this.queryDatabase(question);
+
+                // 合并上下文
+                const context = [docsContext, dbContext].filter(Boolean).join('\n\n');
+                const prompt = this.buildRagPrompt(question, context, conversationHistory);
+
+                // 再次调用AI服务，使用带上下文的prompt
+                const finalResponse = await this.axiosInstance.post(`${this.aiServiceUrl}/chat`, {
+                    prompt,
+                    model: this.configService.get('AI_MODEL_NAME', 'chatglm3-6b'),
+                    temperature: 0.7,
+                    max_tokens: 2000,
+                });
+
+                return {
+                    answer: finalResponse.data.answer,
+                    sources: relevantDocs.map((doc: any) => ({
+                        title: doc.title,
+                        relevance: doc.score,
+                    })),
+                    timestamp: new Date().toISOString(),
+                };
+            } else {
+                // AI服务直接回答了（FAQ或其他），直接返回
+                this.logger.log('AI服务直接返回答案');
+                return {
+                    answer: firstResponse.data.answer,
+                    sources: [],
+                    timestamp: new Date().toISOString(),
+                };
+            }
         } catch (error) {
             this.logger.error(`AI服务调用失败: ${error.message}`);
             return {

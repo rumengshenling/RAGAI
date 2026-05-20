@@ -74,16 +74,60 @@ def load_faq_knowledge_base():
         FAQ_KNOWLEDGE_BASE = []
 
 
+def should_query_database_first(question: str):
+    """
+    判断是否应该优先查询数据库（而不是FAQ）
+    返回：
+        True - 应该优先查数据库
+        False - 优先查FAQ
+    """
+    question_lower = question.lower().strip()
+    
+    # 数据库查询关键词（应该优先查数据库的关键词
+    db_keywords = [
+        "学号", "学生", "学分", "成绩", "教学", "教师", "课程", "学院",
+        "目前", "学生情况", "信息", "怎么样", "如何",
+        "多少个", "有多少",
+        "情况", "现状", "情况是",
+        "教学资源", "师资", "投入", "投入情况"
+    ]
+    
+    # 包含这些关键词的问题，优先查数据库
+    for keyword in db_keywords:
+        if keyword in question_lower:
+            print(f"[DEBUG] 检测到数据库查询关键词：{keyword}，优先查数据库")
+            return True
+    
+    # 学号格式检测：纯数字或者包含特定格式
+    # 检测是否有学号（通常是12位数字）
+    import re
+    if re.search(r"\d{10,}", question_lower):
+        print("[DEBUG] 检测到数字模式，优先查数据库")
+        return True
+    
+    return False
+
+
 def find_matching_faq(question: str):
     """
     在FAQ知识库中查找匹配的问题
-    使用关键词匹配策略
+    使用增强的匹配策略：精确匹配优先 + 关键词权重增强 + 相似度计算
+    注意：如果判断是否应该查数据库时，会降低FAQ匹配
     """
+    # 先判断是否应该优先查数据库
+    if should_query_database_first(question):
+        print("[DEBUG] 问题类型判断：应该优先查数据库，降低FAQ匹配分数")
+        # 如果是数据库查询类型，不匹配，但FAQ阈值大幅提高匹配门槛
+        min_score = 500  # 提高到非常高的阈值，才匹配要求
+    else:
+        min_score = 100  # 正常FAQ匹配阈值
+    
     if not FAQ_KNOWLEDGE_BASE:
         return None
     
     # 预处理用户问题
     question_lower = question.lower().strip()
+    question_clean = question_lower
     
     best_match = None
     best_score = 0
@@ -91,27 +135,74 @@ def find_matching_faq(question: str):
     # 遍历所有FAQ
     for faq in FAQ_KNOWLEDGE_BASE:
         score = 0
+        faq_question_lower = faq["question"].lower()
+        faq_category_lower = faq.get("category", "").lower()
         
-        # 直接匹配问题
-        if faq["question"].lower() in question_lower:
+        # ============= 1. 精确匹配（最高优先级）=============
+        if question_lower == faq_question_lower:
+            score += 1000  # 完全一致，给最高权重
+        
+        # ============= 2. 问题包含关系（高优先级）=============
+        elif faq_question_lower in question_lower:
+            score += 500
+        elif question_lower in faq_question_lower:
+            score += 300
+        
+        # ============= 3. 关键词匹配（非常重要）=============
+        keyword_match_count = 0
+        for keyword in faq.get("keywords", []):
+            keyword_lower = keyword.lower()
+            if keyword_lower in question_lower:
+                # 根据关键词长度调整权重
+                keyword_score = 50 + (len(keyword) * 3)
+                score += keyword_score
+                keyword_match_count += 1
+        
+        # 如果匹配了多个关键词，给予额外奖励
+        if keyword_match_count >= 3:
+            score += 200
+        elif keyword_match_count == 2:
+            score += 80
+        
+        # ============= 4. 分类匹配（重要辅助）=============
+        if faq_category_lower in question_lower:
             score += 100
         
-        # 关键词匹配
-        for keyword in faq.get("keywords", []):
-            if keyword.lower() in question_lower:
-                score += 10
+        # ============= 5. 词重叠
+        question_words = set(question_lower.split())
+        faq_words = set(faq_question_lower.split())
+        common_words = question_words & faq_words
+        word_overlap_score = len(common_words) * 40
+        score += word_overlap_score
         
-        # 分类匹配（可选）
-        if faq.get("category") and faq["category"].lower() in question_lower:
-            score += 5
+        # ============= 6. 特别关键词优先
+        # 学费相关
+        if any(k in question_lower for k in ["学费", "多少钱", "费用", "收费"]):
+            if "缴费" in faq_category_lower or "学费" in faq_question_lower:
+                score += 300
+        
+        # 请假相关
+        if any(k in question_lower for k in ["请假", "事假", "休假", "离校", "申请假期"]):
+            if "请假" in faq_category_lower or "请假" in faq_question_lower:
+                score += 300
+        
+        # 奖学金相关
+        if any(k in question_lower for k in ["奖学金", "助学金", "奖励", "资助", "补助"]):
+            if "缴费" in faq_category_lower and any(k in faq_question_lower for k in ["奖学金", "助学金"]):
+                score += 300
         
         # 更新最佳匹配
         if score > best_score:
             best_score = score
             best_match = faq
     
-    # 只有分数足够高时才返回匹配结果
-    if best_score >= 10:  # 至少匹配一个关键词
+    print(f"[DEBUG] 最佳匹配得分：{best_score}，阈值：{min_score}")
+    if best_match:
+        print(f"[DEBUG] 匹配问题：{best_match['question']}")
+        print(f"[DEBUG] 匹配分类：{best_match.get('category')}")
+    
+    # 根据是否是数据库查询类型，使用更高的阈值
+    if best_score >= min_score:
         return {
             "question": best_match["question"],
             "answer": best_match["answer"],
@@ -207,11 +298,56 @@ async def startup_event():
 async def chat(request: ChatRequest):
     """
     文本生成接口
-    优先使用FAQ知识库，其次Ollama本地模型，否则返回模拟响应
+    智能判断：优先FAQ，然后判断是否需要后端查数据库
     """
     try:
+        prompt = request.prompt
+        
+        # 关键判断：如果prompt已经包含知识库或数据库数据（也就是NestJS发来的完整prompt）
+        # 这时候应该直接调用Ollama生成回答，不要再判断是否需要查数据库
+        if "知识数据" in prompt or "学生总数" in prompt or "学生信息" in prompt:
+            print(f"[DEBUG] 检测到包含知识库/数据库数据的完整prompt，直接调用Ollama")
+            if USE_OLLAMA:
+                import json
+                headers = {
+                    "Content-Type": "application/json; charset=UTF-8",
+                    "Accept": "application/json; charset=UTF-8"
+                }
+                
+                data = {
+                    "model": request.model if request.model and request.model != "chatglm3-6b" else OLLAMA_MODEL,
+                    "messages": [
+                        {"role": "user", "content": prompt}
+                    ],
+                    "stream": False
+                }
+                
+                json_str = json.dumps(data, ensure_ascii=False)
+                print(f"[DEBUG] 发送给Ollama的JSON：{json_str[:200]}...")
+                
+                response = requests.post(
+                    f"{OLLAMA_URL}/api/chat",
+                    data=json_str.encode('utf-8'),
+                    headers=headers,
+                    timeout=60
+                )
+                response.encoding = 'utf-8'
+                
+                print(f"[DEBUG] Ollama响应状态码：{response.status_code}")
+                
+                if response.status_code == 200:
+                    result = response.json()
+                    answer = result.get('message', {}).get('content', '生成失败')
+                    return ChatResponse(answer=answer, model=data["model"])
+            
+            # Ollama不可用时使用模拟模式
+            answer = f"【模拟模式】收到问题：{prompt}\n\n请安装Ollama并下载模型以获得真实回答：\n1. 安装Ollama：https://ollama.com\n2. 运行：ollama pull qwen:7b"
+            return ChatResponse(answer=answer, model="simulation")
+        
+        # 下面是普通问题的处理逻辑
+        
         # 预处理用户输入
-        processed_text, input_type = process_input(request.prompt)
+        processed_text, input_type = process_input(prompt)
         print(f"[DEBUG] 输入类型：{input_type}，处理后文本：{repr(processed_text)}")
         
         # 如果是数学计算且已计算完成，直接返回结果
@@ -220,16 +356,27 @@ async def chat(request: ChatRequest):
         
         # 1. 首先检查FAQ知识库
         print(f"[DEBUG] 检查FAQ知识库...")
-        faq_match = find_matching_faq(request.prompt)
+        faq_match = find_matching_faq(prompt)
         
-        if faq_match:
+        # 2. 判断是否需要后端继续查数据库
+        needs_db_query = should_query_database_first(prompt)
+        
+        if faq_match and not needs_db_query:
+            # FAQ匹配成功，且不是数据库查询类型 → 直接返回FAQ
             print(f"✅ FAQ匹配成功！问题：{faq_match['question']}")
             print(f"   得分：{faq_match['score']}，分类：{faq_match['category']}")
             # 使用FAQ回答，并加上来源标识
             faq_answer = f"{faq_match['answer']}\n\n[来自知识库：{faq_match['category']}]"
             return ChatResponse(answer=faq_answer, model="faq-knowledge-base")
         
-        # 2. FAQ中没有匹配，调用Ollama
+        # 3. FAQ未匹配，或者是数据库查询类型 → 返回标志，让后端继续处理
+        if needs_db_query:
+            print(f"[DEBUG] 判断为数据库查询，让后端继续处理")
+            # 返回一个特殊标识，让NestJS知道应该继续查数据库
+            # NestJS会检测这个特殊回答，然后继续走数据库查询流程
+            return ChatResponse(answer="__NEED_DB_QUERY__", model="db-query-needed")
+        
+        # 4. 普通问题，FAQ未匹配，调用Ollama
         print(f"[DEBUG] FAQ未匹配，调用Ollama...")
         
         if USE_OLLAMA:
@@ -248,7 +395,7 @@ async def chat(request: ChatRequest):
             }
             
             json_str = json.dumps(data, ensure_ascii=False)
-            print(f"[DEBUG] 发送给 Ollama 的 JSON：{json_str[:200]}...")
+            print(f"[DEBUG] 发送给Ollama的JSON：{json_str[:200]}...")
             
             response = requests.post(
                 f"{OLLAMA_URL}/api/chat",
@@ -258,20 +405,20 @@ async def chat(request: ChatRequest):
             )
             response.encoding = 'utf-8'
             
-            print(f"[DEBUG] Ollama 响应状态码：{response.status_code}")
+            print(f"[DEBUG] Ollama响应状态码：{response.status_code}")
             
             if response.status_code == 200:
                 result = response.json()
                 answer = result.get('message', {}).get('content', '生成失败')
                 return ChatResponse(answer=answer, model=data["model"])
         
-        # 3. Ollama不可用时使用模拟模式
-        answer = f"【模拟模式】收到问题：{request.prompt}\n\n请安装 Ollama 并下载模型以获得真实回答：\n1. 安装 Ollama：https://ollama.com\n2. 运行：ollama pull qwen:7b"
+        # 5. Ollama不可用时使用模拟模式
+        answer = f"【模拟模式】收到问题：{prompt}\n\n请安装Ollama并下载模型以获得真实回答：\n1. 安装Ollama：https://ollama.com\n2. 运行：ollama pull qwen:7b"
         return ChatResponse(answer=answer, model="simulation")
         
     except Exception as e:
         print(f"[ERROR] 处理失败：{str(e)}")
-        answer = f"AI 服务暂时不可用。\n\n错误信息：{str(e)}\n\n请检查：\n1. Ollama 是否已安装并运行\n2. 模型是否已下载：ollama pull qwen:7b"
+        answer = f"AI服务暂时不可用。\n\n错误信息：{str(e)}\n\n请检查：\n1. Ollama是否已安装并运行\n2. 模型是否已下载：ollama pull qwen:7b"
         return ChatResponse(answer=answer, model="error")
 
 @app.post("/embed", response_model=EmbedResponse)
